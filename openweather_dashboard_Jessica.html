@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Painel de Clima Global – OpenWeather</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <style>
+    :root{
+      --bg:#0b0f17;--panel:#111827;--muted:#1f2937;--text:#e5e7eb;--sub:#9ca3af;--accent:#22d3ee;--ok:#10b981;--warn:#f59e0b
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial}
+    header{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:12px 16px;background:linear-gradient(180deg,#0b1220,#0b0f17);border-bottom:1px solid #1f2937}
+    .brand{font-weight:800;letter-spacing:.3px}
+    .controls{display:flex;gap:8px;align-items:center}
+    .controls input,.controls select{background:#0f172a;color:var(--text);border:1px solid #1f2937;padding:10px 12px;border-radius:12px}
+    button{background:var(--accent);color:#081018;border:none;padding:10px 14px;border-radius:12px;font-weight:700;cursor:pointer}
+    main{display:grid;grid-template-columns:2fr 1fr;gap:12px;padding:12px}
+    #map{height:70vh;border:1px solid #1f2937;border-radius:16px;overflow:hidden}
+    .panel{background:var(--panel);border:1px solid #1f2937;border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:10px}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .kpi{background:#0f172a;border:1px solid #1f2937;border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:120px}
+    .kpi .label{font-size:12px;color:var(--sub);text-transform:uppercase;letter-spacing:.08em}
+    .kpi .value{font-size:20px;font-weight:800}
+    .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+    .card{background:#0f172a;border:1px solid #1f2937;border-radius:14px;padding:10px}
+    .card .d{font-size:12px;color:var(--sub)}
+    .card .t{font-size:18px;font-weight:800}
+    canvas{width:100%;height:220px}
+    @media(max-width:1000px){main{grid-template-columns:1fr} #map{height:50vh}}
+    .muted{color:#9ca3af}
+    .badge{background:#0b1220;border:1px solid #1f2937;border-radius:999px;padding:6px 10px;font-size:12px}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">🌍 Painel de Clima Global</div>
+    <div class="controls">
+      <input id="cityInput" type="text" placeholder="Buscar cidade (ex.: São Paulo)"/>
+      <select id="unitsSel"><option value="metric">°C, km/h</option><option value="imperial">°F, mph</option></select>
+      <button id="btnSearch">Buscar</button>
+      <span class="badge" id="status">Pronto</span>
+    </div>
+  </header>
+  <main>
+    <section class="panel">
+      <div id="map"></div>
+      <div class="muted" style="font-size:12px">Dica: clique no mapa para ver o clima do ponto. Arraste para navegar.</div>
+    </section>
+    <section class="panel">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <div class="muted" id="locName">—</div>
+          <div class="badge" id="conditions">—</div>
+        </div>
+        <div class="kpi"><div class="label">Atual</div><div class="value" id="kpiNow">—</div></div>
+      </div>
+      <div class="row">
+        <div class="kpi"><div class="label">Umidade</div><div class="value" id="kpiHum">—</div></div>
+        <div class="kpi"><div class="label">Vento</div><div class="value" id="kpiWind">—</div></div>
+        <div class="kpi"><div class="label">Pressão</div><div class="value" id="kpiPres">—</div></div>
+      </div>
+      <div class="cards" id="cards"></div>
+      <div class="panel" style="padding:10px">
+        <div class="row" style="justify-content:space-between"><div class="muted">Temperatura (próximos 5 dias)</div><div class="badge" id="tz">—</div></div>
+        <canvas id="chart"></canvas>
+      </div>
+    </section>
+  </main>
+  <footer class="muted" style="padding:10px 12px;border-top:1px solid #1f2937">Fonte: OpenWeather. Este painel usa dados ao vivo.</footer>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+  const OPENWEATHER_KEY = '0324746670f38960f9c0d0cb859e5404'; 
+  let map, marker, chart;
+  let units = 'metric';
+
+  function uTemp(v){ return units==='metric'? `${v.toFixed(1)}°C` : `${v.toFixed(1)}°F`; }
+  function uWind(v){ return units==='metric'? `${v.toFixed(1)} km/h` : `${v.toFixed(1)} mph`; }
+  function setStatus(t){ document.getElementById('status').textContent=t; }
+
+  function initMap(){
+    map = L.map('map',{worldCopyJump:true}).setView([ -14.235, -51.925 ], 4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+    map.on('click', async (e)=>{ await loadByLatLon(e.latlng.lat, e.latlng.lng); });
+  }
+
+  async function geocodeCity(q){
+    const url = `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(q)}&limit=1&appid=${OPENWEATHER_KEY}`;
+    const r = await fetch(url); if(!r.ok) throw new Error('Falha no geocoding');
+    const data = await r.json(); if(!data.length) throw new Error('Cidade não encontrada');
+    return data[0];
+  }
+
+  async function fetchCurrent(lat, lon){
+    const url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=${units}&appid=${OPENWEATHER_KEY}&lang=pt_br`;
+    const r = await fetch(url); if(!r.ok) throw new Error('Falha ao obter clima atual');
+    return r.json();
+  }
+
+  async function fetchForecast(lat, lon){
+    const url = `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&units=${units}&appid=${OPENWEATHER_KEY}&lang=pt_br`;
+    const r = await fetch(url); if(!r.ok) throw new Error('Falha ao obter previsão');
+    return r.json();
+  }
+
+  function iconUrl(icon){ return `https://openweathermap.org/img/wn/${icon}@2x.png`; }
+
+  function ensureMarker(lat,lon, title){
+    if(marker){ marker.setLatLng([lat,lon]); }
+    else{ marker = L.marker([lat,lon]).addTo(map); }
+    if(title) marker.bindPopup(title).openPopup();
+  }
+
+  function groupForecast(list){
+    const days = {};
+    list.forEach(item=>{
+      const d = item.dt_txt.split(' ')[0];
+      days[d] = days[d]||[]; days[d].push(item);
+    });
+    return Object.entries(days).map(([d,arr])=>{
+      const tmin = Math.min(...arr.map(x=>x.main.temp_min));
+      const tmax = Math.max(...arr.map(x=>x.main.temp_max));
+      const hum  = Math.round(arr.reduce((s,x)=>s+x.main.humidity,0)/arr.length);
+      const wind = arr.reduce((s,x)=>s+x.wind.speed,0)/arr.length;
+      const icon = arr.map(x=>x.weather[0].icon).sort((a,b)=>
+        arr.filter(x=>x.weather[0].icon===a).length - arr.filter(x=>x.weather[0].icon===b).length
+      ).pop();
+      const desc = arr.find(x=>x.weather?.[0]?.description)?.weather?.[0]?.description || '';
+      return {date:d, tmin, tmax, hum, wind, icon, desc};
+    }).slice(0,5);
+  }
+
+  function renderCards(days){
+    const el = document.getElementById('cards'); el.innerHTML='';
+    days.forEach(d=>{
+      const dd = new Date(d.date+"T00:00:00");
+      const fmt = dd.toLocaleDateString(undefined,{weekday:'short', day:'2-digit', month:'short'});
+      const card = document.createElement('div'); card.className='card';
+      card.innerHTML = `
+        <div class="d">${fmt}</div>
+        <img src="${iconUrl(d.icon)}" alt="" width="52" height="52"/>
+        <div class="t">${uTemp(d.tmax)} <span class="muted">/ ${uTemp(d.tmin)}</span></div>
+        <div class="muted">Umidade ${d.hum}% · Vento ${uWind(d.wind)}</div>
+      `;
+      el.appendChild(card);
+    })
+  }
+
+  function renderChart(days){
+    const ctx = document.getElementById('chart');
+    const labels = days.map(d=> new Date(d.date+"T00:00:00").toLocaleDateString(undefined,{weekday:'short'}));
+    const tmax = days.map(d=> d.tmax);
+    const tmin = days.map(d=> d.tmin);
+    if(chart) chart.destroy();
+    chart = new Chart(ctx, {
+      type:'line',
+      data:{ labels, datasets:[
+        {label:'Máxima', data:tmax},
+        {label:'Mínima', data:tmin}
+      ]},
+      options:{
+        responsive:true,
+        plugins:{legend:{labels:{color:'#e5e7eb'}}, tooltip:{enabled:true}},
+        scales:{
+          x:{ticks:{color:'#9ca3af'}, grid:{color:'#1f2937'}},
+          y:{ticks:{color:'#9ca3af', callback:(v)=> uTemp(v)}, grid:{color:'#1f2937'}}
+        }
+      }
+    });
+  }
+
+  function renderCurrent(cur){
+    document.getElementById('locName').textContent = `${cur.name || 'Local'} • ${cur.sys?.country||''}`;
+    const cond = cur.weather?.[0];
+    const now = cur.main?.temp;
+    document.getElementById('kpiNow').textContent = uTemp(now);
+    document.getElementById('kpiHum').textContent = `${cur.main?.humidity}%`;
+    const wind = (units==='metric'? cur.wind?.speed*3.6 : cur.wind?.speed);
+    document.getElementById('kpiWind').textContent = uWind(wind||0);
+    document.getElementById('kpiPres').textContent = `${cur.main?.pressure} hPa`;
+    document.getElementById('conditions').innerHTML = cond ? `<img src="${iconUrl(cond.icon)}" alt="" width="22" height="22" style="vertical-align:-6px"/> ${cond.description}` : '—';
+    const tz = cur.timezone;
+    const local = new Date(Date.now() + tz*1000 - (new Date().getTimezoneOffset()*60000));
+    document.getElementById('tz').textContent = 'Local: '+ local.toLocaleString();
+  }
+
+  async function loadByLatLon(lat,lon){
+    try{
+      setStatus('Carregando…');
+      map.setView([lat,lon], 8);
+      ensureMarker(lat,lon);
+      const cur = await fetchCurrent(lat,lon);
+      const fc  = await fetchForecast(lat,lon);
+      renderCurrent(cur);
+      const days = groupForecast(fc.list);
+      renderCards(days);
+      renderChart(days);
+      ensureMarker(lat,lon, `${cur.name||'Local'}: ${uTemp(cur.main.temp)}`);
+      setStatus('Pronto');
+    }catch(e){
+      console.error(e); setStatus('Erro');
+      alert('Erro ao carregar dados: '+ e.message);
+    }
+  }
+
+  async function onSearch(){
+    const q = document.getElementById('cityInput').value.trim();
+    if(!q) return;
+    try{
+      setStatus('Buscando…');
+      const g = await geocodeCity(q);
+      await loadByLatLon(g.lat, g.lon);
+    }catch(e){ alert(e.message); setStatus('Erro'); }
+  }
+
+  document.getElementById('btnSearch').addEventListener('click', onSearch);
+  document.getElementById('unitsSel').addEventListener('change', (ev)=>{ units = ev.target.value; if(marker){ const ll = marker.getLatLng(); loadByLatLon(ll.lat,ll.lng); } });
+  document.getElementById('cityInput').addEventListener('keydown', (e)=>{ if(e.key==='Enter') onSearch(); });
+
+  function geolocate(){
+    if(!navigator.geolocation){ loadByLatLon(-23.55, -46.63); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos)=>{ const {latitude,longitude}=pos.coords; loadByLatLon(latitude,longitude); },
+      (err)=>{ loadByLatLon(-23.55, -46.63); }
+    );
+  }
+
+  // Inicializa
+  initMap();
+  // Geolocalização automática ao carregar
+  geolocate();
+  </script>
+</body>
+</html>
